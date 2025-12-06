@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from sensecache.models.openai.chat_request import ChatCompletionRequest
 from sensecache.models.openai.chat_response import ChatCompletionResponse
-from sensecache.services.openai_client import OpenAIClient
+from sensecache.services.llm_interface import LLMClient
+from sensecache.api.dependencies import get_llm_client
 from sensecache.core.logger import get_logger
 from sensecache.core.exceptions import SenseCacheError
 
@@ -9,7 +10,10 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
-async def chat_completions(request: ChatCompletionRequest):
+async def chat_completions(
+    request: ChatCompletionRequest,
+    client: LLMClient = Depends(get_llm_client)
+):
     """
     Proxy request to OpenAI Chat Completions API.
     
@@ -20,14 +24,9 @@ async def chat_completions(request: ChatCompletionRequest):
     """
     logger.info("Received chat completion request", model=request.model)
     
-    client = OpenAIClient()
-    
     try:
-        # Pydantic model dump with exclude_none=True to avoid sending nulls for optional fields
-        payload = request.model_dump(exclude_none=True)
-        
         # Call upstream OpenAI
-        response_data = await client.chat_completions(payload)
+        response_data = await client.chat_completions(request)
         
         # Validate/Parse response
         response = ChatCompletionResponse(**response_data)

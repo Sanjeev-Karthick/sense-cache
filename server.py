@@ -9,6 +9,7 @@ from sensecache.api.errors import sense_cache_exception_handler
 from sensecache.core.config import settings
 from sensecache.core.exceptions import SenseCacheError
 from sensecache.core.logger import configure_logger, get_logger
+from sensecache.core.http_client import HttpClientManager
 
 # Configure logging early
 configure_logger(settings.LOG_LEVEL)
@@ -23,10 +24,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting Sense Cache", env=settings.model_dump())
     
     # Startup logic here (e.g., connect to DB, warm up cache)
+    await HttpClientManager.start()
     
     yield
     
     # Shutdown logic here (e.g., close connections)
+    await HttpClientManager.stop()
     logger.info("Shutting down Sense Cache")
 
 def create_app() -> FastAPI:

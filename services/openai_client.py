@@ -1,14 +1,23 @@
 import httpx
 from typing import Dict, Any, Optional
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 from sensecache.core.config import settings
 from sensecache.core.logger import get_logger
 from sensecache.core.exceptions import SenseCacheError
+from sensecache.core.http_client import HttpClientManager
+from sensecache.services.llm_interface import LLMClient
+from sensecache.models.openai.chat_request import ChatCompletionRequest
 
 logger = get_logger(__name__)
 
-class OpenAIClient:
+class OpenAIClient(LLMClient):
     """
-    Client for interacting with OpenAI API.
+    Production-grade client for interacting with OpenAI API.
+    Features:
+    - Connection Pooling (via HttpClientManager)
+    - Automatic Retries (via Tenacity)
+    - Type Safety (via Pydantic models)
     """
     
     def __init__(self, api_key: Optional[str] = None):
@@ -19,56 +28,55 @@ class OpenAIClient:
             "Content-Type": "application/json"
         }
 
-    async def chat_completions(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    @retry(
+        retry=retry_if_exception_type((httpx.RequestError, httpx.TimeoutException)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True
+    )
+    async def chat_completions(self, request: ChatCompletionRequest) -> Dict[str, Any]:
         """
-        Send a chat completion request to OpenAI.
-        
-        Args:
-            payload: The request payload matching OpenAI's schema.
-            
-        Returns:
-            The JSON response from OpenAI.
-            
-        Raises:
-            SenseCacheError: If the upstream request fails.
+        Send a chat completion request to OpenAI with retries.
         """
         url = f"{self.base_url}/chat/completions"
         
+        # Access the global singleton client
+        client = HttpClientManager.get_client()
+        
+        # Pydantic dump
+        payload = request.model_dump(exclude_none=True)
+        
         logger.info("Forwarding request to OpenAI", model=payload.get("model"))
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            try:
-                response = await client.post(
-                    url, 
-                    headers=self.headers, 
-                    json=payload
+        try:
+            response = await client.post(
+                url, 
+                headers=self.headers, 
+                json=payload
+            )
+            
+            if response.status_code != 200:
+                logger.error(
+                    "Upstream OpenAI error", 
+                    status_code=response.status_code, 
+                    details=response.text
                 )
-                
-                # Log latency if possible (httpx response object might have timing info, 
-                # or we rely on the logger decorator/middleware for general latency)
-                
-                if response.status_code != 200:
-                    logger.error(
-                        "Upstream OpenAI error", 
-                        status_code=response.status_code, 
-                        details=response.text
-                    )
-                    # Attempt to parse OpenAI error
-                    try:
-                        error_data = response.json()
-                        error_msg = error_data.get("error", {}).get("message", response.text)
-                    except Exception:
-                        error_msg = response.text
-                        
-                    raise SenseCacheError(f"OpenAI API Error: {error_msg}")
-                
-                return response.json()
-                
-            except httpx.RequestError as e:
-                logger.error("Network error communicating with OpenAI", error=str(e))
-                raise SenseCacheError(f"Network error: {str(e)}")
-            except Exception as e:
-                if isinstance(e, SenseCacheError):
-                    raise e
-                logger.error("Unexpected error in OpenAI Client", error=str(e))
-                raise SenseCacheError(f"Internal proxy error: {str(e)}")
+                # Parse error safely
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", {}).get("message", response.text)
+                except Exception:
+                    error_msg = response.text
+                    
+                raise SenseCacheError(f"OpenAI API Error: {error_msg}")
+            
+            return response.json()
+            
+        except httpx.RequestError as e:
+            logger.warning(f"Network error (attempting retry if eligible): {str(e)}")
+            raise e  # Allow tenacity to catch and retry
+        except Exception as e:
+            if isinstance(e, SenseCacheError):
+                raise e
+            logger.error("Unexpected error in OpenAI Client", error=str(e))
+            raise SenseCacheError(f"Internal proxy error: {str(e)}")

@@ -1,32 +1,23 @@
-from typing import AsyncGenerator
+from functools import lru_cache
+from sensecache.services.llm_interface import LLMClient
+from sensecache.services.openai_client import OpenAIClient
+
+@lru_cache()
+def get_llm_client() -> LLMClient:
+    """
+    Dependency injection provider for the LLM Client.
+    Returns a singleton instance of the configured provider.
+    """
+    # In the future, we could switch implementations based on config here.
+    return OpenAIClient()
+
 from sensecache.cache.base import BaseCache
 from sensecache.cache.redis_cache import RedisCache
-from sensecache.cache.memory_cache import MemoryCache
 from sensecache.core.config import settings
-from sensecache.embeddings.embedder import Embedder
 
-# Global instances for reuse
-_cache_backend: BaseCache | None = None
-_embedder: Embedder | None = None
-
-async def get_cache_backend() -> AsyncGenerator[BaseCache, None]:
+@lru_cache()
+def get_cache_backend() -> BaseCache:
     """
-    Dependency to get the configured cache backend.
+    Dependency injection provider for the Cache Backend.
     """
-    global _cache_backend
-    if _cache_backend is None:
-        if settings.CACHE_BACKEND == "redis":
-            _cache_backend = RedisCache()
-        else:
-            _cache_backend = MemoryCache()
-    
-    yield _cache_backend
-
-def get_embedder() -> Embedder:
-    """
-    Dependency to get the embedder instance.
-    """
-    global _embedder
-    if _embedder is None:
-        _embedder = Embedder()
-    return _embedder
+    return RedisCache(settings.REDIS_URL)
