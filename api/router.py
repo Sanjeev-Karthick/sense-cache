@@ -11,3 +11,6 @@ async def health_check(cache: BaseCache = Depends(get_cache_backend)) -> HealthR
     Health check endpoint.
     """
     return HealthResponse(status="ok")
+
+from sensecache.api.routes import openai_proxy
+router.include_router(openai_proxy.router, tags=["OpenAI"])
